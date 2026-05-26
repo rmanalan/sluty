@@ -222,8 +222,7 @@ def parse_np3(data: bytes) -> PictureControl:
     cg.midtone    = _read_cg_zone(data, _NP3_OFF_CG_MIDTONE)
     cg.shadows    = _read_cg_zone(data, _NP3_OFF_CG_SHADOWS)
 
-    cg_blend_raw = struct.unpack_from(">H", data, _NP3_OFF_CG_BLENDING)[0]
-    cg.blending  = float(cg_blend_raw - 0x80)
+    cg.blending  = _bias(data[_NP3_OFF_CG_BLENDING])
     cg.balance   = _bias(data[_NP3_OFF_CG_BALANCE])
     pc.color_grading = cg
 

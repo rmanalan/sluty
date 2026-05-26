@@ -36,7 +36,7 @@ def make_np3_neutral() -> bytes:
         data[zone_off + 3] = 0x80
 
     # CG blending / balance
-    struct.pack_into(">H", data, 0x180, 0x80)
+    data[0x180] = 0x80   # blending: single byte, 0x80 = neutral (0)
     data[0x182] = 0x80
 
     # Tone curve: flag=0 (no custom curve)

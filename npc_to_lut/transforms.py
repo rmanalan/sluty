@@ -118,15 +118,12 @@ def apply_contrast(rgb: np.ndarray, contrast: float) -> np.ndarray:
     """
     Parametric S-curve contrast around mid-gray (0.5).
     contrast ∈ [-100, 100]; 0 = identity.
+    factor = 3^(contrast/100): gives 3x slope at +100, 1x at 0, 1/3x at -100.
     """
     if abs(contrast) < 1e-6:
         return rgb
 
-    # Scale factor: c=+100 → factor ≈ tan(π/2) ≈ very steep; clamped to avoid overflow.
-    angle = math.pi / 4.0 * (1.0 + contrast / 100.0)
-    angle = max(0.01, min(angle, math.pi / 2.0 - 0.01))
-    factor = math.tan(angle)
-
+    factor = math.exp(math.log(3.0) * contrast / 100.0)
     out = 0.5 + (rgb - 0.5) * factor
     return np.clip(out, 0, 1)
 
@@ -163,8 +160,8 @@ def apply_white_black(rgb: np.ndarray, white_level: float, black_level: float) -
     if abs(white_level) < 1e-6 and abs(black_level) < 1e-6:
         return rgb
 
-    black_out = np.clip(black_level / 1000.0, 0, 0.5)
-    white_out = np.clip(1.0 - white_level / 1000.0, 0.5, 1.0)
+    black_out = np.clip(black_level / 1000.0, -0.5, 0.5)
+    white_out = np.clip(1.0 - white_level / 1000.0, 0.5, 1.5)
     return np.clip(black_out + rgb * (white_out - black_out), 0, 1)
 
 
@@ -273,8 +270,8 @@ def apply_color_grading(rgb: np.ndarray, grading) -> np.ndarray:
         g_bias = -abs(cr + cg_b) * 0.25
         b_bias = cg_b * 0.5
 
-        # Brightness delta
-        bright_delta = zone.brightness / 100.0 * 0.5
+        # Brightness delta: ±0.15 max keeps midtone lifts photographic
+        bright_delta = zone.brightness / 100.0 * 0.15
 
         bias = np.array([r_bias, g_bias, b_bias]) + bright_delta
         out += mask[:, np.newaxis] * bias
