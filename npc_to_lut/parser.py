@@ -104,6 +104,9 @@ _NP3_OFF_TC_RAW         = 0x1CC
 _CB_BAND_STRIDE = 3   # bytes per color-blender band
 _CB_BAND_COUNT  = 8   # Red, Orange, Yellow, Green, Cyan, Blue, Purple, Magenta
 
+# Minimum file size for a valid NP3 (tc_flag=0, no tone-curve data needed)
+_NP3_MIN_SIZE = _NP3_OFF_TC_FLAG + 1   # 0x188 = 392 bytes
+
 
 def _bias(v: int) -> float:
     """Decode a biased uint8 (bias = 0x80) to a signed integer."""
@@ -174,7 +177,7 @@ def _spline_to_lut(points: list) -> list:
 
 
 def parse_np3(data: bytes) -> PictureControl:
-    if len(data) < _NP3_OFF_TC_RAW + 257 * 2:
+    if len(data) < _NP3_MIN_SIZE:
         raise ValueError(f"NP3 file too short: {len(data)} bytes")
 
     pc = PictureControl(source_format="np3")
@@ -193,6 +196,8 @@ def parse_np3(data: bytes) -> PictureControl:
     # Tone curve
     tc_flag = data[_NP3_OFF_TC_FLAG]
     if tc_flag == 2:
+        if len(data) < _NP3_OFF_TC_RAW + 257 * 2:
+            raise ValueError(f"NP3 file too short for raw tone curve: {len(data)} bytes")
         pc.tone_curve = _decode_tc_raw(data)
     elif tc_flag == 1:
         pts = _decode_tc_points(data)
@@ -283,9 +288,11 @@ def parse_ncp(data: bytes) -> PictureControl:
 def load(path: str) -> PictureControl:
     """
     Load and parse a Nikon Picture Control file.
-    Format is auto-detected by file size (NP3 >= 0x400 bytes, else NCP).
+    Format is auto-detected by file size (NP3 >= _NP3_MIN_SIZE bytes, else NCP).
+    Real NP3 files with tc_flag=0 (no custom tone curve) are ~640 bytes, well
+    below the old 0x400 threshold that caused them to be mis-parsed as NCP.
     """
     data = Path(path).read_bytes()
-    if len(data) >= 0x400:
+    if len(data) >= _NP3_MIN_SIZE:
         return parse_np3(data)
     return parse_ncp(data)
