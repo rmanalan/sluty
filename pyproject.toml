@@ -3,18 +3,20 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "npc-to-lut"
+name = "sluty"
 version = "0.1.0"
-description = "Convert Nikon Custom Picture Control files (.NP3/.NCP) to 3D .cube LUTs"
+description = "Derive a 3D .cube LUT from before/after image pairs (presets, picture controls, film sims, grades)"
+readme = "README.md"
 requires-python = ">=3.9"
 dependencies = [
     "numpy>=1.24",
-    "scipy>=1.10",
-    "click>=8.0",
+    "scipy>=1.7",
+    "tifffile>=2023.1",
+    "pillow>=9.0",
 ]
 
 [project.scripts]
-npc-to-lut = "npc_to_lut.cli:main"
+sluty = "sluty.cli:main"
 
 [project.optional-dependencies]
 dev = [
@@ -23,4 +25,4 @@ dev = [
 ]
 
 [tool.hatch.build.targets.wheel]
-packages = ["npc_to_lut"]
+packages = ["sluty"]
