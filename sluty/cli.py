@@ -33,6 +33,14 @@ def main() -> None:
     ap.add_argument("--kernel", default="thin_plate_spline", help="RBF kernel")
     ap.add_argument("--smoothing", type=float, default=0.02,
                     help="Base smoothing for a single-sample anchor")
+    ap.add_argument("--enforce-monotonic", action="store_true",
+                    help="Force each output channel non-decreasing along its input axis. "
+                         "Suppresses thin-plate-spline ringing in extrapolated regions "
+                         "(shadow blotches, saturated-corner banding) when coverage is low.")
+    ap.add_argument("--shadow-desat", type=float, default=0.0, metavar="LUMA",
+                    help="Roll deep-shadow chroma toward neutral below this output luma "
+                         "(e.g. 0.18; 0 = off). Removes coloured blotching that low-coverage "
+                         "fits amplify in the darks; leaves midtones/highlights untouched.")
     args = ap.parse_args()
 
     if args.source_dir or args.target_dir:
@@ -52,7 +60,8 @@ def main() -> None:
             ap.error(f"Expected an even number of image paths before the .cube, got {len(img_paths)}.")
         pairs = [(img_paths[i], img_paths[i + 1]) for i in range(0, len(img_paths), 2)]
 
-    derive_lut(pairs, cube_path, args.size, args.method, args.kernel, args.smoothing)
+    derive_lut(pairs, cube_path, args.size, args.method, args.kernel, args.smoothing,
+               enforce_monotonic=args.enforce_monotonic, shadow_desat=args.shadow_desat)
 
 
 if __name__ == "__main__":

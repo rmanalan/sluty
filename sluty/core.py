@@ -100,9 +100,44 @@ def accumulate_cells(src: np.ndarray, dst: np.ndarray, lut_size: int,
 # Fit
 # ---------------------------------------------------------------------------
 
+def enforce_monotonic_lut(lut_flat, lut_size):
+    """Force each output channel to be non-decreasing along its own input axis.
+
+    Guards against thin-plate-spline ringing in extrapolated regions (shadows,
+    saturated corners) where the fit can reverse direction and produce colored
+    blotches/banding. Cube order is R fastest, B slowest → reshape to [b,g,r,3];
+    R↔axis 2/chan 0, G↔axis 1/chan 1, B↔axis 0/chan 2.
+    """
+    lut = np.asarray(lut_flat, dtype=np.float64).reshape(
+        lut_size, lut_size, lut_size, 3)
+    for axis, chan in ((2, 0), (1, 1), (0, 2)):
+        lut[..., chan] = np.maximum.accumulate(lut[..., chan], axis=axis)
+    return np.clip(lut.reshape(-1, 3), 0.0, 1.0).astype(np.float32)
+
+
+def shadow_desaturate_lut(lut_flat, hi):
+    """Roll output chroma toward neutral in deep shadows (output luma < ``hi``).
+
+    Low-coverage fits extrapolate the deep-shadow mapping and tend to *amplify*
+    chroma there, turning faint shadow noise into coherent coloured blotches.
+    Pulling each dark output node toward its own grey removes the blotching while
+    leaving midtones/highlights — and thus the look — untouched. ``hi`` is the
+    output-luminance threshold (e.g. 0.18); 0 disables. Weight ramps linearly
+    from full desaturation at luma 0 to none at ``hi``.
+    """
+    if not hi:
+        return np.asarray(lut_flat, dtype=np.float32)
+    lut = np.asarray(lut_flat, dtype=np.float64)
+    luma = lut @ np.array([0.2126, 0.7152, 0.0722])
+    grey = lut.mean(axis=1, keepdims=True)
+    w = np.clip((hi - luma) / hi, 0.0, 1.0)[:, None]
+    return np.clip(lut * (1.0 - w) + grey * w, 0.0, 1.0).astype(np.float32)
+
+
 def fit_lut(counts, sum_src, sum_dst, lut_size,
             method="rbf", kernel="thin_plate_spline", smoothing=0.02,
-            epsilon=None, max_anchors=4000, verbose=True):
+            epsilon=None, max_anchors=4000, verbose=True,
+            enforce_monotonic=False, shadow_desat=0.0):
     """Build an (n_cells, 3) LUT from accumulated cell statistics."""
     n_cells = lut_size ** 3
     populated = counts > 0
@@ -128,7 +163,10 @@ def fit_lut(counts, sum_src, sum_dst, lut_size,
             for ch in range(3):
                 vol = lut_3d[:, :, :, ch]
                 vol[empty_3d] = vol[nn[0][empty_3d], nn[1][empty_3d], nn[2][empty_3d]]
-        return np.clip(lut_3d.reshape(n_cells, 3), 0.0, 1.0).astype(np.float32)
+        lut_out = np.clip(lut_3d.reshape(n_cells, 3), 0.0, 1.0).astype(np.float32)
+        if enforce_monotonic:
+            lut_out = enforce_monotonic_lut(lut_out, lut_size)
+        return shadow_desaturate_lut(lut_out, shadow_desat)
 
     if method == "rbf":
         from scipy.interpolate import RBFInterpolator
@@ -156,7 +194,20 @@ def fit_lut(counts, sum_src, sum_dst, lut_size,
             if over.any():
                 print(f"  {over.sum():,} nodes ({100*over.mean():.1f}%) extrapolated past "
                       f"[0,1] then clipped (deep saturated corners with no measured data)")
-        return np.clip(lut, 0.0, 1.0).astype(np.float32)
+        lut_out = np.clip(lut, 0.0, 1.0).astype(np.float32)
+        if enforce_monotonic:
+            had = int((np.diff(lut_out.reshape(lut_size, lut_size, lut_size, 3),
+                               axis=2)[..., 0] < -1e-4).sum())
+            lut_out = enforce_monotonic_lut(lut_out, lut_size)
+            if verbose and had:
+                print(f"  monotonicity enforced (removed extrapolation ringing "
+                      f"in shadows/saturated corners)")
+        if shadow_desat:
+            lut_out = shadow_desaturate_lut(lut_out, shadow_desat)
+            if verbose:
+                print(f"  deep-shadow chroma rolled off below luma {shadow_desat:g} "
+                      f"(removes extrapolated colour blotching in darks)")
+        return lut_out
 
     raise ValueError(f"Unknown method: {method!r}")
 
@@ -239,7 +290,8 @@ def pairs_from_dirs(source_dir: str, target_dir: str):
 
 
 def derive_lut(pairs, cube_path, lut_size=33, method="rbf",
-               kernel="thin_plate_spline", smoothing=0.02):
+               kernel="thin_plate_spline", smoothing=0.02,
+               enforce_monotonic=False, shadow_desat=0.0):
     """Read pairs, accumulate, fit, validate, and write a .cube file."""
     counts = sum_src = sum_dst = None
     total_px = 0
@@ -258,17 +310,24 @@ def derive_lut(pairs, cube_path, lut_size=33, method="rbf",
 
     print(f"\nTotal pixels binned: {total_px:,}")
     print(f"Fitting LUT (method={method}, kernel={kernel}) …")
-    lut_out = fit_lut(counts, sum_src, sum_dst, lut_size, method, kernel, smoothing)
+    lut_out = fit_lut(counts, sum_src, sum_dst, lut_size, method, kernel, smoothing,
+                      enforce_monotonic=enforce_monotonic, shadow_desat=shadow_desat)
 
     cov = 100 * (counts > 0).sum() / lut_size ** 3
     if method == "rbf":
         validate_gamut_corners(lut_out, lut_size)
 
     pair_names = ", ".join(f"{Path(a).name}→{Path(b).name}" for a, b in pairs)
+    mono_note = ("\n# Monotonicity enforced (per-axis) to suppress extrapolation ringing."
+                 if enforce_monotonic else "")
+    desat_note = (f"\n# Deep-shadow chroma rolled off below luma {shadow_desat:g} "
+                  f"(removes extrapolated colour blotching in darks)."
+                  if shadow_desat else "")
     header = (f"Sources: {pair_names}\n"
               f"# Coverage: {cov:.1f}% of the {lut_size}³ grid measured directly; "
               f"the rest is extrapolated (least reliable in saturated corners).\n"
-              f"# Method: {method} ({kernel}); {len(pairs)} pair(s), {total_px:,} pixels.")
+              f"# Method: {method} ({kernel}); {len(pairs)} pair(s), {total_px:,} pixels."
+              f"{mono_note}{desat_note}")
     write_cube(lut_out, cube_path, lut_size, header)
     print(f"Done — {lut_size}³ LUT written to {cube_path}")
     return lut_out

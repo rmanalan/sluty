@@ -59,6 +59,8 @@ sluty --source-dir Flat --target-dir "My Look" --out look.cube --size 65
 | `--method` | `rbf` | `rbf` (recommended) or `nn` (nearest-neighbour fill, for comparison). |
 | `--kernel` | `thin_plate_spline` | RBF kernel — the most robust across coverage levels. |
 | `--smoothing` | `0.02` | Base smoothing for a single-sample anchor. |
+| `--enforce-monotonic` | off | Force each output channel non-decreasing along its input axis. Suppresses thin-plate-spline ringing in extrapolated regions (shadow blotches, saturated-corner banding) when coverage is low. |
+| `--shadow-desat` | `0` (off) | Roll deep-shadow chroma toward neutral below this output luma (e.g. `0.18`). Removes coloured blotching that low-coverage fits amplify in the darks; leaves midtones/highlights — and the look — untouched. |
 
 The generated `.cube` header records how much of the grid was measured directly vs. extrapolated.
 
